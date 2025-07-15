@@ -1,0 +1,335 @@
+<div class="row">
+  <div class="col-12">
+    <!-- Upload Section -->
+    <div class="upload-section">
+      <h2>📂 Upload de Arquivo KML</h2>
+      <p class="text-muted mb-4">Selecione um arquivo KML para visualizar os polígonos no mapa</p>
+
+      <%= form_with url: upload_kml_maps_path, method: :post, multipart: true, local: true, id: 'upload-form' do |form| %>
+        <div class="row">
+          <div class="col-md-8">
+            <div class="file-input-wrapper">
+              <%= form.file_field :kml_file, accept: ".kml", class: "form-control", id: "kml_file", style: "display: none;" %>
+              <label for="kml_file" class="file-input-label">
+                <div class="file-icon">📁</div>
+                <div><strong>Clique para selecionar arquivo KML</strong></div>
+                <div class="text-muted mt-2">ou arraste e solte aqui</div>
+              </label>
+            </div>
+          </div>
+          <div class="col-md-4 d-flex align-items-end">
+            <%= form.submit "Upload KML", class: "btn btn-primary btn-upload w-100", id: "upload-btn" %>
+            <div class="loading-spinner spinner-border spinner-border-sm text-light" role="status">
+              <span class="visually-hidden">Loading...</span>
+            </div>
+          </div>
+        </div>
+      <% end %>
+    </div>
+  </div>
+</div>
+
+<% if @polygons.any? %>
+  <!-- Stats Row -->
+  <div class="row stats-row">
+    <div class="col-md-3">
+      <div class="stat-card">
+        <div class="stat-number"><%= @polygons.count %></div>
+        <div class="stat-label">Polígonos</div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="stat-card">
+        <div class="stat-number"><%= @polygons.sum { |p| p.coordinates_array.length } %></div>
+        <div class="stat-label">Total de Pontos</div>
+      </div>
+    </div>
+    <div class="col-md-3">
+      <div class="stat-card">
+        <div class="stat-number"><%= Time.current.strftime("%H:%M") %></div>
+        <div class="stat-label">Último Upload</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Map -->
+  <div class="row">
+    <div class="col-12">
+      <div class="map-container">
+        <div id="map"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Polygons List -->
+  <div class="row mt-4">
+    <div class="col-12">
+      <div class="polygons-section">
+        <h3>📍 Polígonos Carregados</h3>
+        <p class="text-muted mb-4">Lista de todos os polígonos extraídos do arquivo KML</p>
+
+        <div class="row">
+          <% @polygons.each_with_index do |polygon, index| %>
+            <div class="col-md-6 col-lg-4 mb-3">
+              <div class="polygon-card" data-polygon-id="<%= polygon.id %>">
+                <div class="polygon-name">
+                  <span class="badge bg-primary me-2"><%= index + 1 %></span>
+                  <%= polygon.name %>
+                </div>
+                <div class="polygon-description">
+                  <%= truncate(polygon.description, length: 100) %>
+                </div>
+                <div class="polygon-meta">
+                  <small>
+                    <i class="bi bi-geo-alt"></i> <%= polygon.coordinates_array.length %> pontos
+                    <span class="ms-2">
+                      <i class="bi bi-calendar"></i> <%= polygon.created_at.strftime("%d/%m/%Y %H:%M") %>
+                    </span>
+                  </small>
+                </div>
+                <div class="mt-2">
+                  <button class="btn btn-sm btn-outline-primary" onclick="focusPolygon(<%= index %>)">
+                    Ver no Mapa
+                  </button>
+                </div>
+              </div>
+            </div>
+          <% end %>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<% else %>
+  <!-- Empty State -->
+  <div class="row">
+    <div class="col-12">
+      <div class="polygons-section">
+        <div class="empty-state">
+          <div class="empty-state-icon">🗺️</div>
+          <h3>Nenhum polígono carregado</h3>
+          <p class="text-muted">Faça upload de um arquivo KML para começar a visualizar polígonos no mapa</p>
+        </div>
+      </div>
+    </div>
+  </div>
+<% end %>
+
+<!-- Google Maps Integration -->
+<script>
+    let map;
+    let infoWindow;
+    let polygons = [];
+    let mapPolygons = [];
+
+    function initMap() {
+        // Configuração inicial do mapa
+        const mapConfig = {
+            center: { lat: -14.235, lng: -51.925 }, // Centro do Brasil
+            zoom: 4,
+            mapTypeId: 'hybrid',
+            mapTypeControl: true,
+            streetViewControl: false,
+            fullscreenControl: true,
+            zoomControl: true,
+            styles: [
+                {
+                    featureType: 'poi',
+                    elementType: 'labels',
+                    stylers: [{ visibility: 'off' }]
+                }
+            ]
+        };
+
+        map = new google.maps.Map(document.getElementById('map'), mapConfig);
+        infoWindow = new google.maps.InfoWindow();
+
+        <% if @polygons.any? %>
+        // Dados dos polígonos do Rails
+        polygons = <%= raw @polygons.map { |p| {
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        coordinates: p.coordinates_array,
+        created_at: p.created_at.strftime("%d/%m/%Y %H:%M")
+      } }.to_json %>;
+
+        // Criar polígonos no mapa
+        polygons.forEach(function(polygonData, index) {
+            createPolygon(polygonData, index);
+        });
+
+        // Ajustar zoom para mostrar todos os polígonos
+        fitMapToPolygons();
+        <% end %>
+    }
+
+    function createPolygon(polygonData, index) {
+        // Converter coordenadas para formato do Google Maps
+        const coordinates = polygonData.coordinates.map(function(coord) {
+            return { lat: coord.lat, lng: coord.lng };
+        });
+
+        // Cores alternadas para os polígonos
+        const colors = [
+            '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FECA57',
+            '#FF9FF3', '#54A0FF', '#5F27CD', '#00D2D3', '#FF9F43'
+        ];
+        const color = colors[index % colors.length];
+
+        // Criar o polígono
+        const polygon = new google.maps.Polygon({
+            paths: coordinates,
+            strokeColor: color,
+            strokeOpacity: 0.8,
+            strokeWeight: 2,
+            fillColor: color,
+            fillOpacity: 0.35,
+            clickable: true
+        });
+
+        // Adicionar ao mapa
+        polygon.setMap(map);
+        mapPolygons.push(polygon);
+
+        // Eventos do polígono
+        addPolygonEvents(polygon, polygonData, index);
+    }
+
+    function addPolygonEvents(polygon, polygonData, index) {
+        // Mouseover - mostrar informações
+        polygon.addListener('mouseover', function(e) {
+            const contentString = `
+        <div class="polygon-info-window">
+          <h4>${polygonData.name}</h4>
+          <p><strong>Descrição:</strong> ${polygonData.description}</p>
+          <p><strong>Pontos:</strong> ${polygonData.coordinates.length}</p>
+          <p><strong>Criado:</strong> ${polygonData.created_at}</p>
+        </div>
+      `;
+
+            infoWindow.setContent(contentString);
+            infoWindow.setPosition(e.latLng);
+            infoWindow.open(map);
+        });
+
+        // Mouseout - esconder informações
+        polygon.addListener('mouseout', function() {
+            infoWindow.close();
+        });
+
+        // Click - centralizar e destacar
+        polygon.addListener('click', function() {
+            focusPolygon(index);
+        });
+    }
+
+    function focusPolygon(index) {
+        if (mapPolygons[index]) {
+            const polygon = mapPolygons[index];
+            const bounds = new google.maps.LatLngBounds();
+
+            // Calcular bounds do polígono
+            polygon.getPath().forEach(function(latLng) {
+                bounds.extend(latLng);
+            });
+
+            // Ajustar mapa
+            map.fitBounds(bounds);
+
+            // Destacar polígono temporariamente
+            const originalFillOpacity = polygon.get('fillOpacity');
+            const originalStrokeWeight = polygon.get('strokeWeight');
+
+            polygon.setOptions({
+                fillOpacity: 0.6,
+                strokeWeight: 4
+            });
+
+            // Voltar ao normal após 2 segundos
+            setTimeout(function() {
+                polygon.setOptions({
+                    fillOpacity: originalFillOpacity,
+                    strokeWeight: originalStrokeWeight
+                });
+            }, 2000);
+
+            // Scroll para o mapa
+            document.getElementById('map').scrollIntoView({
+                behavior: 'smooth',
+                block: 'center'
+            });
+        }
+    }
+
+    function fitMapToPolygons() {
+        if (polygons.length > 0) {
+            const bounds = new google.maps.LatLngBounds();
+
+            polygons.forEach(function(polygonData) {
+                polygonData.coordinates.forEach(function(coord) {
+                    bounds.extend(new google.maps.LatLng(coord.lat, coord.lng));
+                });
+            });
+
+            map.fitBounds(bounds);
+
+            // Garantir zoom mínimo
+            google.maps.event.addListenerOnce(map, 'bounds_changed', function() {
+                if (map.getZoom() > 15) {
+                    map.setZoom(15);
+                }
+            });
+        }
+    }
+
+    // Drag and drop para upload
+    document.addEventListener('DOMContentLoaded', function() {
+        const fileLabel = document.querySelector('.file-input-label');
+        const fileInput = document.getElementById('kml_file');
+
+        if (fileLabel && fileInput) {
+            ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+                fileLabel.addEventListener(eventName, preventDefaults, false);
+                document.body.addEventListener(eventName, preventDefaults, false);
+            });
+
+            ['dragenter', 'dragover'].forEach(eventName => {
+                fileLabel.addEventListener(eventName, highlight, false);
+            });
+
+            ['dragleave', 'drop'].forEach(eventName => {
+                fileLabel.addEventListener(eventName, unhighlight, false);
+            });
+
+            fileLabel.addEventListener('drop', handleDrop, false);
+        }
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        function highlight(e) {
+            fileLabel.classList.add('has-file');
+        }
+
+        function unhighlight(e) {
+            fileLabel.classList.remove('has-file');
+        }
+
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+
+            if (files.length > 0) {
+                fileInput.files = files;
+                const event = new Event('change', { bubbles: true });
+                fileInput.dispatchEvent(event);
+            }
+        }
+    });
+</script>
+<script async defer
+        src="https://maps.googleapis.com/maps/api/js?key=<%= ENV['GOOGLE_MAPS_API_KEY'] %>&callback=initMap">
+</script>
